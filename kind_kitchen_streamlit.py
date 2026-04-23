@@ -1,19 +1,19 @@
 # ================================================================
-#  🍽️  THE KIND KITCHEN — Inventory Manager (Streamlit)
+#  🍽️  THE KIND KITCHEN — Inventory Manager (Streamlit + Google Sheets)
 #
-#  HOW TO RUN:
-#  1. Install:  pip install streamlit pandas
-#  2. Save this file as:  kind_kitchen.py
-#  3. Run:      streamlit run kind_kitchen.py
-#  4. Opens at: http://localhost:8501
+#  HOW TO RUN LOCALLY:
+#  1. Install:  pip install streamlit pandas gspread google-auth
+#  2. Create .streamlit/secrets.toml with your GCP credentials
+#  3. Run:      streamlit run kind_kitchen_streamlit.py
 #
-#  TO DEPLOY FREE (shareable link for your whole group):
-#  1. Push to GitHub
-#  2. Go to share.streamlit.io → connect repo → deploy!
+#  DEPLOYED ON STREAMLIT CLOUD:
+#  - Add your GCP credentials to the Secrets section in Streamlit settings
 # ================================================================
 
 import streamlit as st
 import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 import datetime
 
 # ── Page Config ─────────────────────────────────────────────
@@ -24,216 +24,139 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Google Sheets Connection ─────────────────────────────────
+SHEET_ID = "1WaRKKvRBkzK7GU_Z3dY61betrREAG_WBgzjXvoWtHjs"
+SCOPES   = ["https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"]
+
+@st.cache_resource
+def get_sheet():
+    creds  = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
+    client = gspread.authorize(creds)
+    return client.open_by_key(SHEET_ID).sheet1
+
+def load_inventory():
+    sheet = get_sheet()
+    data  = sheet.get_all_records()
+    if not data:
+        return []
+    return data
+
+def append_item(item):
+    sheet = get_sheet()
+    if not sheet.get_all_records():
+        sheet.append_row(["id","name","category","qty","unit","min_stock","cost","emoji"])
+    sheet.append_row([
+        item["id"], item["name"], item["category"],
+        item["qty"], item["unit"], item["min_stock"],
+        item["cost"], item.get("emoji","📦")
+    ])
+
+def update_row(item):
+    sheet = get_sheet()
+    cell  = sheet.find(str(item["id"]))
+    if cell:
+        sheet.update(f"A{cell.row}:H{cell.row}", [[
+            item["id"], item["name"], item["category"],
+            item["qty"], item["unit"], item["min_stock"],
+            item["cost"], item.get("emoji","📦")
+        ]])
+
+def delete_row(item_id):
+    sheet = get_sheet()
+    cell  = sheet.find(str(item_id))
+    if cell:
+        sheet.delete_rows(cell.row)
+
 # ── Custom CSS ───────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=Lato:wght@300;400;700&display=swap');
 
-html, body, [class*="css"] {
-    font-family: 'Lato', sans-serif;
-}
+html, body, [class*="css"] { font-family: 'Lato', sans-serif; }
+.stApp { background: linear-gradient(135deg, #fdf6ee 0%, #f5ede0 100%); }
 
-/* Background */
-.stApp {
-    background: linear-gradient(135deg, #fdf6ee 0%, #f5ede0 100%);
-}
-
-/* Header banner */
 .kk-banner {
-    background: #2d2318;
-    border-radius: 16px;
-    padding: 24px 32px;
-    margin-bottom: 24px;
-    display: flex;
-    align-items: center;
-    gap: 18px;
+    background: #2d2318; border-radius: 16px; padding: 24px 32px;
+    margin-bottom: 24px; display: flex; align-items: center; gap: 18px;
     box-shadow: 0 4px 20px rgba(45,35,24,0.18);
 }
 .kk-banner-title {
     font-family: 'Playfair Display', Georgia, serif;
-    color: #e8a045;
-    font-size: 32px;
-    font-weight: 800;
-    margin: 0;
-    line-height: 1.1;
+    color: #e8a045; font-size: 32px; font-weight: 800; margin: 0; line-height: 1.1;
 }
 .kk-banner-sub {
-    color: #a08060;
-    font-size: 12px;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    margin-top: 4px;
+    color: #a08060; font-size: 12px; letter-spacing: 3px;
+    text-transform: uppercase; margin-top: 4px;
 }
-
-/* Stat cards */
 .kk-stat-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-    margin-bottom: 24px;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 14px; margin-bottom: 24px;
 }
 .kk-stat {
-    background: #ffffff;
-    border: 1.5px solid #e8d8c0;
-    border-radius: 12px;
-    padding: 16px 20px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    background: #ffffff; border: 1.5px solid #e8d8c0; border-radius: 12px;
+    padding: 16px 20px; display: flex; align-items: center; gap: 12px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 .kk-stat-alert { border-color: #e8a045 !important; background: #fff8f0 !important; }
 .kk-stat-icon  { font-size: 30px; }
 .kk-stat-val   { font-size: 26px; font-weight: 700; color: #2d2318; line-height: 1; }
 .kk-stat-lbl   { font-size: 11px; color: #a08060; letter-spacing: 1.5px; text-transform: uppercase; margin-top: 3px; }
-
-/* Table styling */
 .kk-table-wrap {
-    background: #fff;
-    border-radius: 14px;
-    border: 1.5px solid #e8d8c0;
-    overflow: hidden;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    background: #fff; border-radius: 14px; border: 1.5px solid #e8d8c0;
+    overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.06);
 }
-.kk-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-    font-family: 'Lato', sans-serif;
-}
+.kk-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .kk-table thead tr { background: #2d2318; }
 .kk-table th {
-    color: #e8a045;
-    padding: 13px 16px;
-    text-align: left;
-    font-size: 11px;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    font-weight: 700;
+    color: #e8a045; padding: 13px 16px; text-align: left;
+    font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 700;
 }
 .kk-table td { padding: 13px 16px; border-top: 1px solid #f0e4d4; vertical-align: middle; }
 .kk-table tr:hover td { background: #fdf0e0; }
 .kk-row-low td { background: #fff8f0 !important; }
-
-/* Stock bar */
 .kk-bar-wrap { display: flex; align-items: center; gap: 8px; }
 .kk-bar-bg   { width: 72px; height: 8px; background: #f0e4d4; border-radius: 4px; overflow: hidden; }
 .kk-bar-fill { height: 100%; border-radius: 4px; }
-
-/* Category badge */
-.kk-badge {
-    border-radius: 20px;
-    padding: 3px 11px;
-    font-size: 12px;
-    font-weight: 700;
-    display: inline-block;
-}
-
-/* Alert cards */
+.kk-badge    { border-radius: 20px; padding: 3px 11px; font-size: 12px; font-weight: 700; display: inline-block; }
 .kk-alert-card {
-    background: #fff;
-    border: 1.5px solid #e8a045;
-    border-radius: 12px;
-    padding: 16px 20px;
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    gap: 14px;
+    background: #fff; border: 1.5px solid #e8a045; border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 10px; display: flex; align-items: center; gap: 14px;
     box-shadow: 0 2px 8px rgba(232,160,69,0.08);
 }
 .kk-ok {
-    background: #f0fff4;
-    border: 1.5px solid #5cb85c;
-    border-radius: 12px;
-    padding: 28px;
-    text-align: center;
-    color: #3a7a3a;
-    font-size: 17px;
-    font-weight: 600;
+    background: #f0fff4; border: 1.5px solid #5cb85c; border-radius: 12px;
+    padding: 28px; text-align: center; color: #3a7a3a; font-size: 17px; font-weight: 600;
 }
-
-/* Category summary cards */
 .kk-cat-card {
-    background: #fff;
-    border-radius: 12px;
-    padding: 18px 20px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    margin-bottom: 12px;
+    background: #fff; border-radius: 12px; padding: 18px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 12px;
 }
-
-/* Section headers */
 .kk-section-title {
-    font-family: 'Playfair Display', Georgia, serif;
-    color: #2d2318;
-    font-size: 22px;
-    font-weight: 700;
-    margin-bottom: 16px;
-    padding-bottom: 8px;
-    border-bottom: 2px solid #e8d8c0;
+    font-family: 'Playfair Display', Georgia, serif; color: #2d2318;
+    font-size: 22px; font-weight: 700; margin-bottom: 16px;
+    padding-bottom: 8px; border-bottom: 2px solid #e8d8c0;
 }
-
-/* Sidebar */
-section[data-testid="stSidebar"] {
-    background: #2d2318 !important;
-}
-section[data-testid="stSidebar"] * {
-    color: #e8d8c0 !important;
-}
-section[data-testid="stSidebar"] .stSelectbox label,
-section[data-testid="stSidebar"] .stTextInput label,
-section[data-testid="stSidebar"] .stNumberInput label {
-    color: #a08060 !important;
-    font-size: 12px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-}
+section[data-testid="stSidebar"] { background: #2d2318 !important; }
+section[data-testid="stSidebar"] * { color: #e8d8c0 !important; }
 section[data-testid="stSidebar"] h2 {
     color: #e8a045 !important;
     font-family: 'Playfair Display', Georgia, serif !important;
 }
-
-/* Streamlit button overrides */
 .stButton > button {
-    background: #e8a045;
-    color: #2d2318;
-    border: none;
-    border-radius: 8px;
-    font-weight: 700;
-    font-family: 'Lato', sans-serif;
-    padding: 8px 20px;
-    transition: background 0.2s;
+    background: #e8a045; color: #2d2318; border: none; border-radius: 8px;
+    font-weight: 700; padding: 8px 20px; transition: background 0.2s;
 }
 .stButton > button:hover { background: #d4903a; color: #fff; }
-
-div[data-testid="stMetricValue"] {
-    font-family: 'Playfair Display', Georgia, serif;
-    color: #2d2318;
-}
-
-/* Tab styling */
 .stTabs [data-baseweb="tab-list"] {
-    background: #fff;
-    border-radius: 10px 10px 0 0;
-    border-bottom: 2px solid #e8d8c0;
-    gap: 4px;
-    padding: 0 8px;
+    background: #fff; border-radius: 10px 10px 0 0;
+    border-bottom: 2px solid #e8d8c0; gap: 4px; padding: 0 8px;
 }
 .stTabs [data-baseweb="tab"] {
-    font-family: 'Lato', sans-serif;
-    font-weight: 700;
-    color: #a08060;
-    border-radius: 8px 8px 0 0;
-    padding: 10px 20px;
+    font-weight: 700; color: #a08060;
+    border-radius: 8px 8px 0 0; padding: 10px 20px;
 }
-.stTabs [aria-selected="true"] {
-    background: #2d2318 !important;
-    color: #e8a045 !important;
-}
-
-/* Success / error messages */
-.stSuccess { background: #f0fff4 !important; border-left: 4px solid #5cb85c !important; }
-.stError   { background: #fff0f0 !important; border-left: 4px solid #e87070 !important; }
-.stWarning { background: #fff8f0 !important; border-left: 4px solid #e8a045 !important; }
+.stTabs [aria-selected="true"] { background: #2d2318 !important; color: #e8a045 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -249,26 +172,34 @@ CAT_COLORS = {
     "Other":   ("#aaaaaa", "#f0f0f0"),
 }
 
-# ── Session State (in-memory database) ──────────────────────
-if "inventory" not in st.session_state:
+# ── Load from Google Sheets ──────────────────────────────────
+if "inventory" not in st.session_state or st.session_state.get("force_reload"):
+    raw = load_inventory()
     st.session_state.inventory = [
-        {"id": 1, "name": "Olive Oil",       "category": "Pantry",  "qty": 8,  "unit": "bottles", "min_stock": 4,  "cost": 12.99, "emoji": "🫙"},
-        {"id": 2, "name": "Canned Tomatoes", "category": "Pantry",  "qty": 2,  "unit": "cans",    "min_stock": 10, "cost": 1.49,  "emoji": "🥫"},
-        {"id": 3, "name": "Carrots",         "category": "Produce", "qty": 15, "unit": "lbs",     "min_stock": 5,  "cost": 0.89,  "emoji": "🥕"},
-        {"id": 4, "name": "Onions",          "category": "Produce", "qty": 20, "unit": "lbs",     "min_stock": 8,  "cost": 0.69,  "emoji": "🧅"},
-        {"id": 5, "name": "Brown Rice",      "category": "Grains",  "qty": 3,  "unit": "bags",    "min_stock": 6,  "cost": 4.99,  "emoji": "🌾"},
-        {"id": 6, "name": "Chicken Broth",   "category": "Pantry",  "qty": 12, "unit": "cartons", "min_stock": 6,  "cost": 3.29,  "emoji": "🍲"},
-        {"id": 7, "name": "Lentils",         "category": "Grains",  "qty": 5,  "unit": "lbs",     "min_stock": 4,  "cost": 1.99,  "emoji": "🫘"},
-        {"id": 8, "name": "Spinach",         "category": "Produce", "qty": 1,  "unit": "bags",    "min_stock": 4,  "cost": 3.49,  "emoji": "🥬"},
+        {
+            "id":        int(r.get("id", 0)),
+            "name":      str(r.get("name", "")),
+            "category":  str(r.get("category", "Other")),
+            "qty":       float(r.get("qty", 0)),
+            "unit":      str(r.get("unit", "")),
+            "min_stock": float(r.get("min_stock", 0)),
+            "cost":      float(r.get("cost", 0)),
+            "emoji":     str(r.get("emoji", "📦")),
+        }
+        for r in raw if r.get("name")
     ]
+    st.session_state.force_reload = False
+
 if "next_id" not in st.session_state:
-    st.session_state.next_id = 9
+    ids = [i["id"] for i in st.session_state.inventory]
+    st.session_state.next_id = max(ids) + 1 if ids else 1
+
 if "log" not in st.session_state:
     st.session_state.log = []
 
 inv = st.session_state.inventory
 
-# ── Helper Functions ─────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────
 def total_value():
     return sum(i["qty"] * i["cost"] for i in inv)
 
@@ -282,14 +213,14 @@ def add_log(msg):
         st.session_state.log = st.session_state.log[:20]
 
 def stock_bar_html(item):
-    pct = min(100, int(item["qty"] / max(item["min_stock"] * 2, 1) * 100))
+    pct   = min(100, int(item["qty"] / max(item["min_stock"] * 2, 1) * 100))
     color = "#e87070" if pct < 30 else "#e8a045" if pct < 60 else "#5cb85c"
     warn  = "⚠️" if item["qty"] < item["min_stock"] else ""
     qty_color = "#c87000" if item["qty"] < item["min_stock"] else "#2d2318"
     return (
         f'<div class="kk-bar-wrap">'
         f'<div class="kk-bar-bg"><div class="kk-bar-fill" style="width:{pct}%;background:{color}"></div></div>'
-        f'<span style="font-weight:700;color:{qty_color}">{item["qty"]}</span>{warn}'
+        f'<span style="font-weight:700;color:{qty_color}">{int(item["qty"])}</span>{warn}'
         f'</div>'
     )
 
@@ -297,7 +228,7 @@ def cat_badge_html(cat):
     fg, bg = CAT_COLORS.get(cat, ("#aaa", "#f0f0f0"))
     return f'<span class="kk-badge" style="color:{fg};background:{bg};border:1px solid {fg}">{cat}</span>'
 
-# ── Header Banner ────────────────────────────────────────────
+# ── Header ───────────────────────────────────────────────────
 st.markdown("""
 <div class="kk-banner">
   <span style="font-size:48px">🍽️</span>
@@ -308,10 +239,16 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+col_r1, col_r2 = st.columns([8, 1])
+with col_r2:
+    if st.button("🔄 Refresh"):
+        st.session_state.force_reload = True
+        st.rerun()
+
 # ── Stat Strip ───────────────────────────────────────────────
-low = low_stock()
+low         = low_stock()
 cats_active = len(set(i["category"] for i in inv))
-alert_cls = "kk-stat kk-stat-alert" if low else "kk-stat"
+alert_cls   = "kk-stat kk-stat-alert" if low else "kk-stat"
 
 st.markdown(f"""
 <div class="kk-stat-grid">
@@ -339,34 +276,28 @@ st.markdown(f"""
 with st.sidebar:
     st.markdown("## ➕ Add New Item")
     st.markdown("---")
-
     s_emoji = st.text_input("Icon (emoji)", value="📦")
     s_name  = st.text_input("Item Name *")
     s_cat   = st.selectbox("Category", CATEGORIES)
     s_unit  = st.text_input("Unit (e.g. lbs, cans) *")
-
     col1, col2 = st.columns(2)
     with col1:
         s_qty = st.number_input("Qty *", min_value=0.0, step=1.0)
     with col2:
         s_min = st.number_input("Min Stock", min_value=0.0, step=1.0)
-
     s_cost = st.number_input("Cost per unit ($)", min_value=0.0, step=0.01, format="%.2f")
 
     if st.button("➕ Add Item", use_container_width=True):
         if not s_name.strip() or not s_unit.strip():
             st.error("Name and unit are required.")
         else:
-            inv.append({
-                "id": st.session_state.next_id,
-                "name": s_name.strip(),
-                "category": s_cat,
-                "qty": s_qty,
-                "unit": s_unit.strip(),
-                "min_stock": s_min,
-                "cost": s_cost,
-                "emoji": s_emoji or "📦",
-            })
+            new_item = {
+                "id": st.session_state.next_id, "name": s_name.strip(),
+                "category": s_cat, "qty": s_qty, "unit": s_unit.strip(),
+                "min_stock": s_min, "cost": s_cost, "emoji": s_emoji or "📦",
+            }
+            inv.append(new_item)
+            append_item(new_item)
             st.session_state.next_id += 1
             add_log(f"✅ Added {s_name.strip()}")
             st.success(f"Added {s_emoji} {s_name}!")
@@ -376,14 +307,15 @@ with st.sidebar:
     st.markdown("## 🔧 Adjust Quantity")
     if inv:
         item_names = [f"{i['emoji']} {i['name']}" for i in inv]
-        adj_sel   = st.selectbox("Item", item_names, key="adj_sel")
-        adj_delta = st.number_input("Change by (+ add / − remove)", step=1, value=0, key="adj_delta")
+        adj_sel    = st.selectbox("Item", item_names, key="adj_sel")
+        adj_delta  = st.number_input("Change by (+ add / − remove)", step=1, value=0, key="adj_delta")
         if st.button("✅ Apply Adjustment", use_container_width=True):
             for item in inv:
                 if f"{item['emoji']} {item['name']}" == adj_sel:
                     item["qty"] = max(0, item["qty"] + adj_delta)
-                    add_log(f"{'➕' if adj_delta>=0 else '➖'} {item['name']} → {item['qty']} {item['unit']}")
-                    st.success(f"Updated! {item['name']} is now {item['qty']} {item['unit']}")
+                    update_row(item)
+                    add_log(f"{'➕' if adj_delta >= 0 else '➖'} {item['name']} → {int(item['qty'])} {item['unit']}")
+                    st.success(f"Updated! {item['name']} is now {int(item['qty'])} {item['unit']}")
                     st.rerun()
 
     st.markdown("---")
@@ -394,6 +326,7 @@ with st.sidebar:
         if st.button("🗑️ Delete Item", use_container_width=True):
             for item in inv:
                 if f"{item['emoji']} {item['name']}" == del_sel:
+                    delete_row(item["id"])
                     inv.remove(item)
                     add_log(f"🗑️ Removed {item['name']}")
                     st.warning(f"Removed {item['name']}")
@@ -411,7 +344,6 @@ tab_inv, tab_alerts, tab_summary = st.tabs(["📦 Inventory", "⚠️ Alerts", "
 # ── TAB 1: Inventory ─────────────────────────────────────────
 with tab_inv:
     st.markdown('<div class="kk-section-title">All Inventory</div>', unsafe_allow_html=True)
-
     fc1, fc2, fc3 = st.columns([3, 2, 2])
     with fc1:
         search = st.text_input("🔍 Search", placeholder="Search items...", label_visibility="collapsed")
@@ -420,66 +352,45 @@ with tab_inv:
     with fc3:
         sort_by = st.selectbox("Sort", ["Name", "Quantity", "Low Stock First"], label_visibility="collapsed")
 
-    # Filter & sort
     rows = [i for i in inv
             if (cat_filter == "All" or i["category"] == cat_filter)
             and search.lower() in i["name"].lower()]
-    if sort_by == "Name":           rows.sort(key=lambda x: x["name"])
-    elif sort_by == "Quantity":     rows.sort(key=lambda x: x["qty"])
+    if sort_by == "Name":              rows.sort(key=lambda x: x["name"])
+    elif sort_by == "Quantity":        rows.sort(key=lambda x: x["qty"])
     elif sort_by == "Low Stock First": rows.sort(key=lambda x: x["qty"] - x["min_stock"])
 
-    # Build HTML table
     if not rows:
         st.info("No items match your search.")
     else:
         rows_html = ""
         for item in rows:
             low_cls = 'class="kk-row-low"' if item["qty"] < item["min_stock"] else ""
-            value   = item["qty"] * item["cost"]
             rows_html += f"""
             <tr {low_cls}>
-              <td>
-                <span style="font-size:20px">{item['emoji']}</span>
-                <strong style="margin-left:8px;color:#2d2318">{item['name']}</strong>
-                <span style="color:#a08060;font-size:11px;margin-left:4px">({item['unit']})</span>
-              </td>
+              <td><span style="font-size:20px">{item['emoji']}</span>
+                  <strong style="margin-left:8px;color:#2d2318">{item['name']}</strong>
+                  <span style="color:#a08060;font-size:11px;margin-left:4px">({item['unit']})</span></td>
               <td>{cat_badge_html(item['category'])}</td>
               <td>{stock_bar_html(item)}</td>
               <td style="color:#a08060;text-align:center">{int(item['min_stock'])}</td>
-              <td style="font-weight:700;color:#2d2318">${value:.2f}</td>
+              <td style="font-weight:700;color:#2d2318">${item['qty']*item['cost']:.2f}</td>
             </tr>"""
-
         st.markdown(f"""
-        <div class="kk-table-wrap">
-          <table class="kk-table">
-            <thead><tr>
-              <th>Item</th>
-              <th>Category</th>
-              <th>Stock</th>
-              <th style="text-align:center">Min Stock</th>
-              <th>Value</th>
-            </tr></thead>
-            <tbody>{rows_html}</tbody>
-          </table>
-        </div>
-        """, unsafe_allow_html=True)
+        <div class="kk-table-wrap"><table class="kk-table">
+          <thead><tr>
+            <th>Item</th><th>Category</th><th>Stock</th>
+            <th style="text-align:center">Min Stock</th><th>Value</th>
+          </tr></thead>
+          <tbody>{rows_html}</tbody>
+        </table></div>""", unsafe_allow_html=True)
 
-    # CSV Export
     st.markdown("<br>", unsafe_allow_html=True)
     if inv:
-        df = pd.DataFrame([{
-            "Name": i["name"], "Category": i["category"],
-            "Qty": i["qty"], "Unit": i["unit"],
-            "Min Stock": i["min_stock"], "Cost/Unit": i["cost"],
-            "Total Value": round(i["qty"] * i["cost"], 2)
-        } for i in inv])
-        csv = df.to_csv(index=False)
-        st.download_button(
-            "⬇️ Export CSV",
-            data=csv,
-            file_name=f"kind_kitchen_inventory_{datetime.date.today()}.csv",
-            mime="text/csv",
-        )
+        df  = pd.DataFrame([{"Name": i["name"], "Category": i["category"], "Qty": i["qty"],
+                              "Unit": i["unit"], "Min Stock": i["min_stock"],
+                              "Cost/Unit": i["cost"], "Total Value": round(i["qty"]*i["cost"],2)} for i in inv])
+        st.download_button("⬇️ Export CSV", data=df.to_csv(index=False),
+                           file_name=f"kind_kitchen_{datetime.date.today()}.csv", mime="text/csv")
 
 # ── TAB 2: Alerts ────────────────────────────────────────────
 with tab_alerts:
@@ -491,7 +402,6 @@ with tab_alerts:
     else:
         for item in sorted(low, key=lambda x: x["qty"] - x["min_stock"]):
             needed = int(item["min_stock"] - item["qty"])
-            fg, bg = CAT_COLORS.get(item["category"], ("#aaa","#f0f0f0"))
             st.markdown(f"""
             <div class="kk-alert-card">
               <span style="font-size:34px">{item['emoji']}</span>
@@ -507,48 +417,39 @@ with tab_alerts:
                           padding:8px 16px;font-weight:700;font-size:13px;white-space:nowrap">
                 Need {needed} {item['unit']}
               </div>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
 # ── TAB 3: Summary ───────────────────────────────────────────
 with tab_summary:
     st.markdown('<div class="kk-section-title">📊 Inventory Summary</div>', unsafe_allow_html=True)
-
     cats_present = [c for c in CATEGORIES if any(i["category"] == c for i in inv)]
-    cols = st.columns(len(cats_present) if cats_present else 1)
+    if cats_present:
+        cols = st.columns(len(cats_present))
+        for idx, cat in enumerate(cats_present):
+            items_c = [i for i in inv if i["category"] == cat]
+            val_c   = sum(i["qty"] * i["cost"] for i in items_c)
+            low_c   = sum(1 for i in items_c if i["qty"] < i["min_stock"])
+            fg, bg  = CAT_COLORS.get(cat, ("#aaa", "#f0f0f0"))
+            with cols[idx]:
+                st.markdown(f"""
+                <div class="kk-cat-card" style="border:2px solid {fg}">
+                  <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                              text-transform:uppercase;color:{fg};margin-bottom:8px">{cat}</div>
+                  <div style="font-size:28px;font-weight:700;color:#2d2318;line-height:1">
+                    {len(items_c)}<span style="font-size:13px;color:#a08060;font-weight:400"> items</span></div>
+                  <div style="font-size:14px;color:#5a4a38;margin-top:6px">Value: <strong>${val_c:.2f}</strong></div>
+                  {"<div style='color:#c87000;font-size:12px;font-weight:700;margin-top:6px'>⚠️ "+str(low_c)+" low stock</div>" if low_c else ""}
+                </div>""", unsafe_allow_html=True)
 
-    for idx, cat in enumerate(cats_present):
-        items_c = [i for i in inv if i["category"] == cat]
-        val_c   = sum(i["qty"] * i["cost"] for i in items_c)
-        low_c   = sum(1 for i in items_c if i["qty"] < i["min_stock"])
-        fg, bg  = CAT_COLORS.get(cat, ("#aaa", "#f0f0f0"))
-        with cols[idx]:
-            st.markdown(f"""
-            <div class="kk-cat-card" style="border:2px solid {fg}">
-              <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;
-                          text-transform:uppercase;color:{fg};margin-bottom:8px">{cat}</div>
-              <div style="font-size:28px;font-weight:700;color:#2d2318;line-height:1">
-                {len(items_c)}<span style="font-size:13px;color:#a08060;font-weight:400"> items</span>
-              </div>
-              <div style="font-size:14px;color:#5a4a38;margin-top:6px">
-                Value: <strong>${val_c:.2f}</strong>
-              </div>
-              {"<div style='color:#c87000;font-size:12px;font-weight:700;margin-top:6px'>⚠️ "+str(low_c)+" low stock</div>" if low_c else ""}
-            </div>
-            """, unsafe_allow_html=True)
-
-    # Total value box
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown(f"""
-    <div style="background:#2d2318;border-radius:14px;padding:24px 32px;margin-top:8px">
-      <div style="font-family:'Playfair Display',Georgia,serif;color:#e8a045;
-                  font-size:18px;font-weight:700;margin-bottom:8px">Total Inventory Value</div>
+    <div style="background:#2d2318;border-radius:14px;padding:24px 32px;">
+      <div style="font-family:'Playfair Display',Georgia,serif;color:#e8a045;font-size:18px;font-weight:700;margin-bottom:8px">
+        Total Inventory Value</div>
       <div style="font-size:48px;font-weight:700;color:#fff;font-family:'Playfair Display',Georgia,serif">
-        ${total_value():.2f}
-      </div>
+        ${total_value():.2f}</div>
       <div style="font-size:13px;color:#a08060;margin-top:6px">
         {len(inv)} items across {len(cats_present)} categories
         {" · " + str(len(low_stock())) + " alerts" if low_stock() else " · fully stocked ✅"}
       </div>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
