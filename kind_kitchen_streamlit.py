@@ -1,13 +1,5 @@
 # ================================================================
 #  🍽️  THE KIND KITCHEN — Inventory Manager (Streamlit + Google Sheets)
-#
-#  HOW TO RUN LOCALLY:
-#  1. Install:  pip install streamlit pandas gspread google-auth
-#  2. Create .streamlit/secrets.toml with your GCP credentials
-#  3. Run:      streamlit run kind_kitchen_streamlit.py
-#
-#  DEPLOYED ON STREAMLIT CLOUD:
-#  - Add your GCP credentials to the Secrets section in Streamlit settings
 # ================================================================
 
 import streamlit as st
@@ -31,42 +23,98 @@ SCOPES   = ["https://www.googleapis.com/auth/spreadsheets",
 
 @st.cache_resource
 def get_sheet():
-    creds  = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
+    creds  = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=SCOPES)
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_ID).sheet1
 
+def safe_int(val, default=0):
+    try:
+        return int(float(str(val).strip())) if str(val).strip() != "" else default
+    except:
+        return default
+
+def safe_float(val, default=0.0):
+    try:
+        return float(str(val).strip()) if str(val).strip() != "" else default
+    except:
+        return default
+
+def safe_str(val, default=""):
+    try:
+        return str(val).strip() if val is not None else default
+    except:
+        return default
+
 def load_inventory():
-    sheet = get_sheet()
-    data  = sheet.get_all_records()
-    if not data:
+    try:
+        sheet = get_sheet()
+        data  = sheet.get_all_records()
+        result = []
+        for r in data:
+            name = safe_str(r.get("name", ""))
+            if not name:
+                continue
+            result.append({
+                "id":        safe_int(r.get("id", 0)),
+                "name":      name,
+                "category":  safe_str(r.get("category", "Other")),
+                "qty":       safe_float(r.get("qty", 0)),
+                "unit":      safe_str(r.get("unit", "")),
+                "min_stock": safe_float(r.get("min_stock", 0)),
+                "cost":      safe_float(r.get("cost", 0)),
+                "emoji":     safe_str(r.get("emoji", "📦")) or "📦",
+            })
+        return result
+    except Exception as e:
+        st.error(f"Could not load from Google Sheets: {e}")
         return []
-    return data
 
 def append_item(item):
-    sheet = get_sheet()
-    if not sheet.get_all_records():
-        sheet.append_row(["id","name","category","qty","unit","min_stock","cost","emoji"])
-    sheet.append_row([
-        item["id"], item["name"], item["category"],
-        item["qty"], item["unit"], item["min_stock"],
-        item["cost"], item.get("emoji","📦")
-    ])
-
-def update_row(item):
-    sheet = get_sheet()
-    cell  = sheet.find(str(item["id"]))
-    if cell:
-        sheet.update(f"A{cell.row}:H{cell.row}", [[
+    try:
+        sheet = get_sheet()
+        all_vals = sheet.get_all_values()
+        if not all_vals:
+            sheet.append_row(["id","name","category","qty","unit","min_stock","cost","emoji"])
+        sheet.append_row([
             item["id"], item["name"], item["category"],
             item["qty"], item["unit"], item["min_stock"],
             item["cost"], item.get("emoji","📦")
-        ]])
+        ])
+    except Exception as e:
+        st.error(f"Could not save item: {e}")
+
+def update_row(item):
+    try:
+        sheet = get_sheet()
+        cell  = sheet.find(str(item["id"]))
+        if cell:
+            sheet.update(f"A{cell.row}:H{cell.row}", [[
+                item["id"], item["name"], item["category"],
+                item["qty"], item["unit"], item["min_stock"],
+                item["cost"], item.get("emoji","📦")
+            ]])
+    except Exception as e:
+        st.error(f"Could not update item: {e}")
 
 def delete_row(item_id):
-    sheet = get_sheet()
-    cell  = sheet.find(str(item_id))
-    if cell:
-        sheet.delete_rows(cell.row)
+    try:
+        sheet = get_sheet()
+        cell  = sheet.find(str(item_id))
+        if cell:
+            sheet.delete_rows(cell.row)
+    except Exception as e:
+        st.error(f"Could not delete item: {e}")
+
+def ensure_headers():
+    """Make sure the sheet has headers in row 1."""
+    try:
+        sheet = get_sheet()
+        all_vals = sheet.get_all_values()
+        if not all_vals:
+            sheet.append_row(["id","name","category","qty","unit","min_stock","cost","emoji"])
+    except Exception as e:
+        st.error(f"Could not set up sheet headers: {e}")
 
 # ── Custom CSS ───────────────────────────────────────────────
 st.markdown("""
@@ -172,22 +220,11 @@ CAT_COLORS = {
     "Other":   ("#aaaaaa", "#f0f0f0"),
 }
 
-# ── Load from Google Sheets ──────────────────────────────────
+# ── Load Inventory ───────────────────────────────────────────
+ensure_headers()
+
 if "inventory" not in st.session_state or st.session_state.get("force_reload"):
-    raw = load_inventory()
-    st.session_state.inventory = [
-        {
-            "id":        int(r.get("id", 0)),
-            "name":      str(r.get("name", "")),
-            "category":  str(r.get("category", "Other")),
-            "qty":       float(r.get("qty", 0)),
-            "unit":      str(r.get("unit", "")),
-            "min_stock": float(r.get("min_stock", 0)),
-            "cost":      float(r.get("cost", 0)),
-            "emoji":     str(r.get("emoji", "📦")),
-        }
-        for r in raw if r.get("name")
-    ]
+    st.session_state.inventory  = load_inventory()
     st.session_state.force_reload = False
 
 if "next_id" not in st.session_state:
@@ -360,7 +397,7 @@ with tab_inv:
     elif sort_by == "Low Stock First": rows.sort(key=lambda x: x["qty"] - x["min_stock"])
 
     if not rows:
-        st.info("No items match your search.")
+        st.info("No items yet — add your first item using the sidebar on the left!")
     else:
         rows_html = ""
         for item in rows:
@@ -388,9 +425,11 @@ with tab_inv:
     if inv:
         df  = pd.DataFrame([{"Name": i["name"], "Category": i["category"], "Qty": i["qty"],
                               "Unit": i["unit"], "Min Stock": i["min_stock"],
-                              "Cost/Unit": i["cost"], "Total Value": round(i["qty"]*i["cost"],2)} for i in inv])
+                              "Cost/Unit": i["cost"],
+                              "Total Value": round(i["qty"]*i["cost"],2)} for i in inv])
         st.download_button("⬇️ Export CSV", data=df.to_csv(index=False),
-                           file_name=f"kind_kitchen_{datetime.date.today()}.csv", mime="text/csv")
+                           file_name=f"kind_kitchen_{datetime.date.today()}.csv",
+                           mime="text/csv")
 
 # ── TAB 2: Alerts ────────────────────────────────────────────
 with tab_alerts:
@@ -437,19 +476,23 @@ with tab_summary:
                               text-transform:uppercase;color:{fg};margin-bottom:8px">{cat}</div>
                   <div style="font-size:28px;font-weight:700;color:#2d2318;line-height:1">
                     {len(items_c)}<span style="font-size:13px;color:#a08060;font-weight:400"> items</span></div>
-                  <div style="font-size:14px;color:#5a4a38;margin-top:6px">Value: <strong>${val_c:.2f}</strong></div>
+                  <div style="font-size:14px;color:#5a4a38;margin-top:6px">
+                    Value: <strong>${val_c:.2f}</strong></div>
                   {"<div style='color:#c87000;font-size:12px;font-weight:700;margin-top:6px'>⚠️ "+str(low_c)+" low stock</div>" if low_c else ""}
                 </div>""", unsafe_allow_html=True)
+    else:
+        st.info("No inventory yet — add items using the sidebar to see your summary here!")
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown(f"""
-    <div style="background:#2d2318;border-radius:14px;padding:24px 32px;">
-      <div style="font-family:'Playfair Display',Georgia,serif;color:#e8a045;font-size:18px;font-weight:700;margin-bottom:8px">
-        Total Inventory Value</div>
-      <div style="font-size:48px;font-weight:700;color:#fff;font-family:'Playfair Display',Georgia,serif">
-        ${total_value():.2f}</div>
-      <div style="font-size:13px;color:#a08060;margin-top:6px">
-        {len(inv)} items across {len(cats_present)} categories
-        {" · " + str(len(low_stock())) + " alerts" if low_stock() else " · fully stocked ✅"}
-      </div>
-    </div>""", unsafe_allow_html=True)
+    if inv:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="background:#2d2318;border-radius:14px;padding:24px 32px;">
+          <div style="font-family:'Playfair Display',Georgia,serif;color:#e8a045;
+                      font-size:18px;font-weight:700;margin-bottom:8px">Total Inventory Value</div>
+          <div style="font-size:48px;font-weight:700;color:#fff;
+                      font-family:'Playfair Display',Georgia,serif">${total_value():.2f}</div>
+          <div style="font-size:13px;color:#a08060;margin-top:6px">
+            {len(inv)} items across {len(cats_present)} categories
+            {" · " + str(len(low_stock())) + " alerts" if low_stock() else " · fully stocked ✅"}
+          </div>
+        </div>""", unsafe_allow_html=True)
